@@ -1,0 +1,5 @@
+/target
+release.sh
+test-logs
+penlogs
+notes.*
