@@ -326,8 +326,13 @@ impl Systems {
 		for ipinfo in amass_entry.addresses {
 		    if !self.entries.contains_key(&ipinfo.ip) {
 			self.entries.insert(ipinfo.ip, System::new(ipinfo.clone()));
+		    } else {
+			// check if we can update infos
+			let entry = &mut self.entries.get_mut(&ipinfo.ip).unwrap();
+			entry.ipinfo.cidr = ipinfo.cidr;
+			entry.ipinfo.asn  = ipinfo.asn;
+			entry.ipinfo.desc = ipinfo.desc;
 		    }
-		    // At this point there should be an entry for the IP and therefor just unwrap.
 		    let entry = &mut self.entries.get_mut(&ipinfo.ip).unwrap();
 		    entry.domains.insert(amass_entry.name.clone());
 		}
@@ -343,7 +348,7 @@ impl Systems {
 		    // insert new entry into system entries
 		    self.entries.insert(nmap_host.ip, System::new(IpInfo::new(nmap_host.ip)));
 		}
-		// At this point there should be an entry for the IP and therefor just unwrap.
+
 		let entry = &mut self.entries.get_mut(&nmap_host.ip).unwrap();
 		for ns in &nmap_host.services {
 		    entry.services.insert(Service::new(ns.port, &ns.state, &ns.proto, &ns.app_proto, &ns.banner));
