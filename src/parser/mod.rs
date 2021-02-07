@@ -96,7 +96,7 @@ pub struct IpInfo {
     pub desc: String,
 }
 impl IpInfo {
-    fn new(ip: IpAddr) -> Self {
+    pub fn new(ip: IpAddr) -> Self {
 	Self {
 	    ip: ip,
 	    cidr: "".into(),
@@ -104,9 +104,22 @@ impl IpInfo {
 	    desc: "".into(),
 	}
     }
-
-    fn label(&self) -> String {
+    pub fn label(&self) -> String {
 	format!("{},{}", self.ip, self.desc).into()
+    }
+    pub fn update(&mut self, other: &Self) {
+	if self.ip != other.ip {
+	    return;
+	}
+	if self.cidr.is_empty() && !other.cidr.is_empty() {
+	    self.cidr = other.cidr.clone();
+	}
+	if self.desc.is_empty() && !other.desc.is_empty() {
+	    self.desc = other.desc.clone();
+	}
+	if self.asn == 0 {
+	    self.asn = other.asn;
+	}
     }
 }
 
@@ -329,9 +342,7 @@ impl Systems {
 		    } else {
 			// check if we can update infos
 			let entry = &mut self.entries.get_mut(&ipinfo.ip).unwrap();
-			entry.ipinfo.cidr = ipinfo.cidr;
-			entry.ipinfo.asn  = ipinfo.asn;
-			entry.ipinfo.desc = ipinfo.desc;
+			entry.ipinfo.update(&ipinfo);
 		    }
 		    let entry = &mut self.entries.get_mut(&ipinfo.ip).unwrap();
 		    entry.domains.insert(amass_entry.name.clone());

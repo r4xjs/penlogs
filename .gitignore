@@ -1,5 +1,6 @@
 /target
 release.sh
-test-logs
+test-logs*
 penlogs
 notes.*
+x.*

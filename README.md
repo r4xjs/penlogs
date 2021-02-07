@@ -91,3 +91,10 @@ $ dot -Tsvg  -oexample.svg <(penlogs test-logs dot)
 
 ![dot output as svg](./example.svg)
 
+
+# Binary
+
+Latest static striped release binary can be found here: 
+- https://www.lowsec.net/release/penlogs
+
+
