@@ -22,26 +22,19 @@ pub enum ParseError {
     IntParse(ParseIntError),
 }
 type Result<T> = std::result::Result<T, ParseError>;
-impl From<io::Error> for ParseError {
-    fn from(error: io::Error) -> Self {
-	ParseError::Io(error)
-    }
+macro_rules! impl_from {
+    ($orig:ty, $enum:ident) => {
+	impl From<$orig> for ParseError {
+	    fn from(error: $orig) -> Self {
+		ParseError::$enum(error)
+	    }
+	}
+    };
 }
-impl From<serde_json::Error> for ParseError {
-    fn from(error: serde_json::Error) -> Self {
-	ParseError::Json(error)
-    }
-}
-impl From<AddrParseError> for ParseError {
-    fn from(error: AddrParseError) -> Self {
-	ParseError::Ip(error)
-    }
-}
-impl From<ParseIntError> for ParseError {
-    fn from(error: ParseIntError) -> Self {
-	ParseError::IntParse(error)
-    }
-}
+impl_from!(io::Error, Io);
+impl_from!(serde_json::Error, Json);
+impl_from!(AddrParseError, Ip);
+impl_from!(ParseIntError, IntParse);
 
 
 #[derive(Debug,Deserialize,Serialize,PartialEq,Eq,Hash)]
