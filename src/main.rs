@@ -1,50 +1,50 @@
-use std::path::Path;
 mod parser;
+mod cli;
 
-enum OutFmt {
-    Csv,
-    Json,
-    Dot,
-    Urls,
+fn run_merge_cmd(args: &cli::CliArgs) -> parser::Result<()> {
+    let mut systems = parser::Systems::new();
+    for flag in &args.flags {
+	if let cli::Flag::Dirs(dirs) = flag {
+	    for dir in dirs {
+		systems.parse(dir)?;
+	    }
+	}
+    }
+    let output = match args.fmt {
+	cli::OutFmt::Csv => systems.to_csv(),
+	cli::OutFmt::Json => systems.to_json(),
+	cli::OutFmt::Dot => systems.to_dot(),
+	cli::OutFmt::Urls => systems.to_urls(),
+    };
+    println!("{}", &output);
+    Ok(())
+}
+
+fn run_diff_cmd(_args: &cli::CliArgs) -> parser::Result<()> {
+    Ok(())
 }
 
 
-//dot -Tsvg  -ox.svg <(cargo run -- ./test-logs dot)
+//dot -Tsvg  -ox.svg <(cargo run -- merge dot --dirs test-logs test-logs2)
 fn main() {
     let mut args = std::env::args();
-    if args.len() != 3 {
-	println!("Usage: {} <log-dir> <output-format>", args.nth(0).unwrap());
-	println!("output-format = {{csv,json,dot,urls}}");
-	return;
-    }
-    let logdir = std::env::args().nth(1).unwrap();
-    let output_format = match std::env::args().nth(2).unwrap().as_str() {
-	"csv" => OutFmt::Csv,
-	"json" => OutFmt::Json,
-	"dot" => OutFmt::Dot,
-	"urls" => OutFmt::Urls,
-	v => {
-	    println!("Output format {} is not supported", v);
-	    println!("Supported are: csv, json, dot and urls");
-	    return;
-	}
-    };
-
-    let logdir = Path::new(&logdir);
-    let systems = match parser::Systems::parse(logdir) {
+    let args = match cli::CliArgs::parse(&mut args) {
 	Ok(v) => v,
 	Err(e) => {
 	    println!("{:#?}", e);
 	    return;
 	},
     };
-
-    let output = match output_format {
-	OutFmt::Csv => systems.to_csv(),
-	OutFmt::Json => systems.to_json(),
-	OutFmt::Dot => systems.to_dot(),
-	OutFmt::Urls => systems.to_urls(),
+    let ret = match args.cmd {
+	cli::Cmd::Merge => run_merge_cmd(&args),
+	cli::Cmd::Diff  => run_diff_cmd(&args),
     };
 
-    println!("{}", output);
+    match ret {
+	Ok(_) => return,
+	Err(e) => {
+	    println!("{:?}", e);
+	    return;
+	},
+    }
 }

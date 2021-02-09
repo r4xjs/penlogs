@@ -21,7 +21,7 @@ pub enum ParseError {
     Io(io::Error),
     IntParse(ParseIntError),
 }
-type Result<T> = std::result::Result<T, ParseError>;
+pub type Result<T> = std::result::Result<T, ParseError>;
 macro_rules! impl_from {
     ($orig:ty, $enum:ident) => {
 	impl From<$orig> for ParseError {
@@ -151,17 +151,18 @@ pub struct Systems {
 }
 
 impl Systems {
-    pub fn parse(logdir: &Path) -> Result<Systems> {
+    pub fn new() -> Systems {
+	Self {
+	    entries: HashMap::new(),
+	}
+    }
+
+    pub fn parse(&mut self, logdir: &Path) -> Result<()> {
 	if !logdir.is_dir() {
 	    return Err(ParseError::FileNotFound(format!("directory not found: {:?}", logdir).into()));
 	}
-	let mut systems = Self {
-	    entries: HashMap::new(),
-	};
-	match systems.visit_dirs(&logdir) {
-	    Ok(()) => Ok(systems),
-	    Result::Err(e) => Err(e),
-	}
+	self.visit_dirs(logdir)?;
+	Ok(())
     }
 
     pub fn to_json(&self) -> String {

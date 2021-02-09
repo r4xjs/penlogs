@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[derive(Debug,PartialEq)]
 pub enum OutFmt {
     Csv,
@@ -13,9 +15,9 @@ pub enum Cmd {
 
 #[derive(Debug,PartialEq)]
 pub enum Flag {
-    New(Vec<String>),
-    Old(Vec<String>),
-    Dirs(Vec<String>),
+    New(Vec<PathBuf>),
+    Old(Vec<PathBuf>),
+    Dirs(Vec<PathBuf>),
     None,
 }
 
@@ -93,11 +95,11 @@ impl CliArgs {
 	    // parse the list of directories for the current_flag 
 	    let _ = match current_flag {
 		Flag::Dirs(ref mut v) => {
-		    v.push(arg);
+		    v.push(arg.into());
 		},
 		Flag::Old(ref mut v) | Flag::New(ref mut v) => {
 
-		    v.push(arg);
+		    v.push(arg.into());
 		},
 		Flag::None => return Err("need a flag first".into()),
 	    };
