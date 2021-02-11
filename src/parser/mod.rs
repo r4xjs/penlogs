@@ -37,7 +37,7 @@ impl_from!(AddrParseError, Ip);
 impl_from!(ParseIntError, IntParse);
 
 
-#[derive(Debug,Deserialize,Serialize,PartialEq,Eq,Hash)]
+#[derive(Debug,Deserialize,Serialize,Clone,PartialEq,Eq,Hash)]
 pub enum ServiceState {
     Close,
     Open,
@@ -65,11 +65,20 @@ impl ServiceState {
     }
 }
 
+#[derive(Debug,Deserialize,Serialize,Clone,Copy,PartialEq,Eq,Hash)]
+pub enum DiffState {
+    Deleted,
+    New,
+    None,
+}
+
+
 #[derive(Debug,Deserialize,Serialize)]
 pub struct System {
     ipinfo: IpInfo,
-    domains: HashSet<String>,
+    domains: HashSet<Domain>,
     services: HashSet<Service>, 
+    diff_state: DiffState,
 }
 impl System {
     pub fn new(ip: IpInfo) -> Self {
@@ -77,11 +86,12 @@ impl System {
 	    ipinfo: ip,
 	    domains: HashSet::new(),
 	    services: HashSet::new(),
+	    diff_state: DiffState::None,
 	}
     }
 }
 
-#[derive(Debug,Deserialize,Serialize,Clone)]
+#[derive(Debug,Deserialize,Serialize,Clone,PartialEq,Eq,Hash)]
 pub struct IpInfo {
     pub ip: IpAddr,
     pub cidr: String,
@@ -117,14 +127,29 @@ impl IpInfo {
 }
 
 
+#[derive(Debug,Deserialize,Serialize,Clone,PartialEq,Eq,Hash)]
+pub struct Domain {
+    name: String,
+    diff_state: DiffState,
+}
+impl Domain {
+    pub fn new(domain: &str) -> Self {
+	Self {
+	    name: domain.into(),
+	    diff_state: DiffState::None,
+	}
+	    
+    }
+}
 
-#[derive(Debug,Deserialize,Serialize,PartialEq,Eq,Hash)]
+#[derive(Debug,Deserialize,Serialize,Clone,PartialEq,Eq,Hash)]
 pub struct Service {
     port: u32,
     state: ServiceState,
     proto: String,
     app_proto: String,
     banner: String,
+    diff_state: DiffState,
 }
 impl Service {
     pub fn new(port: u32, state: &str, proto: &str, app_proto: &str, banner: &str) -> Self {
@@ -134,6 +159,7 @@ impl Service {
 	    proto: proto.into(),
 	    app_proto: app_proto.into(),
 	    banner: banner.into(),
+	    diff_state: DiffState::None,
 	}
     }
     pub fn label(&self) -> String {
@@ -148,12 +174,14 @@ impl Service {
 #[derive(Debug,Deserialize,Serialize)]
 pub struct Systems {
     entries: HashMap<IpAddr, System>,
+    diffed: bool,
 }
 
 impl Systems {
     pub fn new() -> Systems {
 	Self {
 	    entries: HashMap::new(),
+	    diffed: false,
 	}
     }
 
@@ -165,6 +193,142 @@ impl Systems {
 	Ok(())
     }
 
+    pub fn diff(&self, new: &Self) -> Result<Self> {
+	// TODO: do this better and faster later
+
+	let mut ret = Self::new();
+
+	// fill up IP sets
+	let old_ips: HashSet<IpInfo> = self.entries.values().map(|x| x.ipinfo.clone()).collect();
+	let new_ips: HashSet<IpInfo> = new.entries.values().map(|x| x.ipinfo.clone()).collect();
+
+	// fill up domain sets
+	fn merge_domains(systems: &Systems) -> HashSet<Domain> {
+	    let mut ret: HashSet<Domain> = HashSet::new();
+	    for (_, system) in &systems.entries {
+		for domain in &system.domains {
+		    ret.insert(domain.clone());
+		}
+	    }
+	    ret
+	}
+	let old_domains = merge_domains(&self);
+	let new_domains = merge_domains(&new);
+
+	// fill up Service sets
+	fn merge_services(systems: &Systems) -> HashSet<Service> {
+	    let mut ret: HashSet<Service> = HashSet::new();
+	    for (_, system) in &systems.entries {
+		for service in &system.services {
+		    ret.insert(service.clone());
+		}
+	    }
+	    ret
+	}
+	let old_services = merge_services(&self);
+	let new_services = merge_services(&new);
+
+	// now that we have nice flat sets we create a new Systems struct
+	// and set the diff_state depending on if old_x is in new_set and new_x is in old_set
+	for old_ip in &old_ips {
+	    let mut system = System::new(old_ip.clone());
+
+	    // diff ip
+	    if !new_ips.contains(old_ip) {
+		system.diff_state = DiffState::Deleted;
+	    }
+
+	    // diff domains
+	    let old_system = self.entries.get(&old_ip.ip).unwrap();
+	    for old_domain in &old_system.domains {
+		let mut domain = old_domain.clone();
+		if !new_domains.contains(old_domain) {
+		    domain.diff_state = DiffState::Deleted;
+		}
+		if new.entries.contains_key(&old_ip.ip) && 
+		    !new.entries.get(&old_ip.ip).unwrap().domains.contains(old_domain) {
+			domain.diff_state = DiffState::Deleted;
+		}
+		system.domains.insert(domain);
+	    }
+
+	    // diff services
+	    for old_service in &old_system.services {
+		let mut service = old_service.clone();
+		if !new_services.contains(old_service) {
+		    service.diff_state = DiffState::Deleted;
+		}
+		if new.entries.contains_key(&old_ip.ip) && 
+		    !new.entries.get(&old_ip.ip).unwrap().services.contains(old_service) {
+			service.diff_state = DiffState::Deleted;
+		}
+
+		system.services.insert(service);
+	    }
+
+	    ret.entries.insert(old_ip.ip, system);
+	}
+
+	for new_ip in &new_ips {
+	    let system = match ret.entries.get_mut(&new_ip.ip) {
+		Some(v) => v,
+		None => {
+		    let mut s = System::new(new_ip.clone());
+		    s.diff_state = DiffState::New;
+		    ret.entries.insert(new_ip.ip, s);
+		    ret.entries.get_mut(&new_ip.ip).unwrap()
+		},
+	    };
+
+	    // diff domains
+	    let new_system = new.entries.get(&new_ip.ip).unwrap();
+	    for new_domain in &new_system.domains {
+		let mut domain = new_domain.clone();
+		if !old_domains.contains(new_domain) {
+		    domain.diff_state = DiffState::New;
+		}
+		if self.entries.contains_key(&new_ip.ip) && 
+		    !self.entries.get(&new_ip.ip).unwrap().domains.contains(new_domain) {
+			// !old.domains.contains(new_domain)
+			domain.diff_state = DiffState::New;
+		}
+		if !self.entries.contains_key(&new_ip.ip) {
+		    // if we have a new ip we want the services to be marked as new 
+		    domain.diff_state = DiffState::New;
+		}
+
+
+		system.domains.insert(domain);
+	    }
+
+	    // diff services
+	    for new_service in &new_system.services {
+		let mut service = new_service.clone();
+		if !old_services.contains(new_service) {
+		    service.diff_state = DiffState::New;
+		}
+		if self.entries.contains_key(&new_ip.ip) && 
+		    !self.entries.get(&new_ip.ip).unwrap().services.contains(new_service) {
+			// !old.services.contains(new_domain)
+			service.diff_state = DiffState::New;
+		}
+		if !self.entries.contains_key(&new_ip.ip) {
+		    // if we have a new ip we want the services to be marked as new 
+		    service.diff_state = DiffState::New;
+		}
+
+		system.services.insert(service);
+	    }
+	}
+
+	
+	// we use this bool for later in the output methods to_XYZ()	
+	// to switch formating
+	ret.diffed = true;
+
+	Ok(ret)
+    }
+
     pub fn to_json(&self) -> String {
 	match serde_json::to_string_pretty(self) {
 	    Ok(v) => v,
@@ -173,39 +337,60 @@ impl Systems {
     }
 
     pub fn to_csv(&self) -> String {
+	fn diff_state_to_string(state: &DiffState, name: &str) -> String {
+	    match *state {
+		DiffState::New => format!("#{}-New", name).into(),
+		DiffState::Deleted => format!("#{}-Deleted", name).into(),
+		DiffState::None => "".into(),
+	    }
+	}
 	let mut ret: Vec<String> = vec!["ip,domain,port,state,proto,app_proto,banner".into()];
 	for entry in self.entries.values() {
+	    let entry_diff_state = diff_state_to_string(&entry.diff_state, "IP");
 	    if entry.domains.len() > 0 {
 		for domain in &entry.domains {
+		    let domain_diff_state = diff_state_to_string(&domain.diff_state, "Domain");
 		    if entry.services.len() > 0 {
 			for service in &entry.services {
-			    ret.push(format!("{},{},{},{},{},{},{}",
+			    let service_diff_state = diff_state_to_string(&service.diff_state, "Service");
+			    ret.push(format!("{}{},{}{},{},{},{},{},{}{}",
 					     entry.ipinfo.ip,
-					     domain,
+					     entry_diff_state,
+					     domain.name,
+					     domain_diff_state,
 					     service.port,
 					     service.state.to_string(),
 					     service.proto,
 					     service.app_proto,
-					     service.banner).into());
+					     service.banner,
+					     service_diff_state).into());
 			}
 		    } else {
-			ret.push(format!("{},{},,,,,", entry.ipinfo.ip, domain));
+			ret.push(format!("{}{},{}{},,,,,",
+					 entry.ipinfo.ip,
+					 entry_diff_state,
+					 domain.name,
+					 domain_diff_state
+			));
 		    }
 		}
 	    } else if entry.services.len() > 0 {
 		for service in &entry.services {
+		    let service_diff_state = diff_state_to_string(&service.diff_state, "Service");
 		    // no domain infos when we get to this branch
-		    ret.push(format!("{},,{},{},{},{},{}",
+		    ret.push(format!("{}{},,{},{},{},{},{}{}",
 				    entry.ipinfo.ip,
+				    entry_diff_state,
 				    service.port,
 				    service.state.to_string(),
 				    service.proto,
 				    service.app_proto,
-				    service.banner).into());
+				    service.banner,
+				    service_diff_state).into());
 		    
 		}
 	    } else {
-		ret.push(format!("{},,,,,,", entry.ipinfo.ip).into());
+		ret.push(format!("{}{},,,,,,", entry.ipinfo.ip, entry_diff_state).into());
 	    }
 	}
 	ret.join("\n")
@@ -218,16 +403,30 @@ impl Systems {
 	const GRAY: &str = "#8697A3";
 	const YELLOW: &str = "#FFFB82";
 
+	const DIFF_RED: &str = "#FF3333";
+	const DIFF_GREEN: &str = "#55FF00";
+	const DIFF_GRAY: &str = "#8C8C8C";
+	//const DIFF_ORANGE: &str = "#E69900";
+
+	fn diff_color(state: &DiffState) -> &'static str{
+	    match *state {
+		DiffState::Deleted => DIFF_RED,
+		DiffState::New => DIFF_GREEN,
+		DiffState::None => DIFF_GRAY,
+	    }
+
+	}
+
 	let mut ret: Vec<String> = vec!["digraph Systems {".into()];
 	ret.push("rankdir=LR".into());
 	ret.push("node  [style=\"rounded,filled,bold\", shape=box, fontname=\"Arial\"];".into());
 
 	// create uniq domain ids
-	let mut domain_map: HashMap<String, u32> = HashMap::new();
+	let mut domain_map: HashMap<Domain, u32> = HashMap::new();
 	let mut domain_id_counter = 0x80000000;
 	for entry in self.entries.values() {
 	    for domain in &entry.domains {
-		if !domain_map.contains_key(domain) {
+		if !domain_map.contains_key(&domain) {
 		    domain_map.insert(domain.clone(), domain_id_counter);
 		    domain_id_counter += 1;
 		}
@@ -235,48 +434,72 @@ impl Systems {
 	}
 
 	// create uniq service ids
-	let mut service_map: HashMap<String, u32> = HashMap::new();
+	let mut service_map: HashMap<Service, u32> = HashMap::new();
 	let mut service_id_counter = 0x00000000;
 	for entry in self.entries.values() {
 	    for service in &entry.services {
-		let service_label = service.label();
-		if !service_map.contains_key(&service_label) {
-		    service_map.insert(service_label, service_id_counter);
+		if !service_map.contains_key(&service) {
+		    service_map.insert(service.clone(), service_id_counter);
 		    service_id_counter += 1;
 		}
 	    }
 	}
 
-	// ip nodes
-	for (ip, system) in &self.entries {
-	    ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", ip, system.ipinfo.label(), BLUE).into());
-	}
+	if !self.diffed {
+	    // normal mode
 
-	// domain nodes
-	for (domain_label, domain_id) in &domain_map {
-	    ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", domain_id, domain_label, YELLOW).into());
-	}
-
-	// sevice nodes
-	for (service_label, service_id) in &service_map {
-	    let mut color = GREEN;
-	    if service_label.contains(", filtered,") {
-		color = GRAY;
+	    // ip nodes
+	    for (ip, system) in &self.entries {
+		ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", ip, system.ipinfo.label(), BLUE).into());
 	    }
-	    ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", service_id, service_label, &color).into());
+
+	    // domain nodes
+	    for (domain, domain_id) in &domain_map {
+		ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", domain_id, domain.name, YELLOW).into());
+	    }
+
+	    // sevice nodes
+	    for (service, service_id) in &service_map {
+		let mut color = GREEN;
+		if service.label().contains(", filtered,") {
+		    color = GRAY;
+		}
+		ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", service_id, service.label(), &color).into());
+	    }
+	} else {
+	    // diff mode
+
+	    // ip nodes
+	    for (ip, system) in &self.entries {
+		let color = diff_color(&system.diff_state);
+		ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", ip, system.ipinfo.label(), color).into());
+	    }
+
+	    // domain nodes
+	    for (domain, domain_id) in &domain_map {
+		let color = diff_color(&domain.diff_state);
+		ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", domain_id, domain.name, color).into());
+	    }
+
+	    // sevice nodes
+	    for (service, service_id) in &service_map {
+		let color = diff_color(&service.diff_state);
+		ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", service_id, service.label(), color).into());
+	    }
+
 	}
 
 	// add "domain -> ip" edges
 	for (ip, entry) in &self.entries {
 	    for domain in &entry.domains {
-		ret.push(format!("\"{}\" -> \"{}\" [splines=ortho]", domain_map.get(domain).unwrap(), ip).into());
+		ret.push(format!("\"{}\" -> \"{}\" [splines=ortho]", domain_map.get(&domain).unwrap(), ip).into());
 	    }
 	}
 
 	// add "ip -> service" edges
 	for (ip, entry) in &self.entries {
 	    for service in &entry.services{
-		ret.push(format!("\"{}\" -> \"{}\"", ip, service_map.get(&service.label()).unwrap()).into());
+		ret.push(format!("\"{}\" -> \"{}\"", ip, service_map.get(&service).unwrap()).into());
 	    }
 	}
 
@@ -294,7 +517,7 @@ impl Systems {
 	    for port in ports {
 		ret.insert(format!("{}://{}:{}\n", schema, system.ipinfo.ip, port));
 		for domain in &system.domains {
-		    ret.insert(format!("{}://{}:{}\n", schema, domain, port));
+		    ret.insert(format!("{}://{}:{}\n", schema, domain.name, port));
 		}
 	    }
 	    ret
@@ -339,7 +562,7 @@ impl Systems {
 			entry.ipinfo.update(&ipinfo);
 		    }
 		    let entry = &mut self.entries.get_mut(&ipinfo.ip).unwrap();
-		    entry.domains.insert(amass_entry.name.clone());
+		    entry.domains.insert(Domain::new(&amass_entry.name));
 		}
 	    }
 	    //println!("{:#?}", &res);
