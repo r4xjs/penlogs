@@ -9,7 +9,7 @@ For Example:
 $ tree test-logs
 test-logs
 ├── amass
-│   ├── domains.json        <-- tool will parse this file
+│   ├── domains.json        <-- the tool will parse this file
 │   └── domains.txt
 └── nmap
     ├── sSCV-top-500.gnmap  <-- and this file
