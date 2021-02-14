@@ -65,11 +65,25 @@ impl ServiceState {
     }
 }
 
-#[derive(Debug,Deserialize,Serialize,Clone,Copy,PartialEq,Eq,Hash)]
+#[derive(Debug,Deserialize,Serialize,Clone,PartialEq,Eq,Hash)]
 pub enum DiffState {
     Deleted,
     New,
+    UpdatedNew,
+    UpdatedOld,
     None,
+}
+impl DiffState {
+    pub fn to_string(&self) -> String {
+	use DiffState::*;
+	match self {
+	    Deleted => "Deleted".into(),
+	    New => "New".into(),
+	    UpdatedNew => "UpdatedNew".into(),
+	    UpdatedOld => "UpdatedOld".into(),
+	    None => "".into(),
+	}
+    }
 }
 
 
@@ -110,15 +124,15 @@ impl IpInfo {
     pub fn label(&self) -> String {
 	format!("{},{}", self.ip, self.desc).into()
     }
-    pub fn update(&mut self, other: &Self) {
+    pub fn update(&mut self, other: Self) {
 	if self.ip != other.ip {
 	    return;
 	}
 	if self.cidr.is_empty() && !other.cidr.is_empty() {
-	    self.cidr = other.cidr.clone();
+	    self.cidr = other.cidr;
 	}
 	if self.desc.is_empty() && !other.desc.is_empty() {
-	    self.desc = other.desc.clone();
+	    self.desc = other.desc;
 	}
 	if self.asn == 0 {
 	    self.asn = other.asn;
@@ -193,21 +207,21 @@ impl Systems {
 	Ok(())
     }
 
-    pub fn diff(&self, new: &Self) -> Result<Self> {
+    pub fn diff(self, new: Self) -> Result<Self> {
 	// TODO: do this better and faster later
 
 	let mut ret = Self::new();
 
 	// fill up IP sets
-	let old_ips: HashSet<IpInfo> = self.entries.values().map(|x| x.ipinfo.clone()).collect();
-	let new_ips: HashSet<IpInfo> = new.entries.values().map(|x| x.ipinfo.clone()).collect();
+	let old_ips: HashSet<&IpInfo> = self.entries.values().map(|x| &x.ipinfo).collect();
+	let new_ips: HashSet<&IpInfo> = new.entries.values().map(|x| &x.ipinfo).collect();
 
 	// fill up domain sets
-	fn merge_domains(systems: &Systems) -> HashSet<Domain> {
-	    let mut ret: HashSet<Domain> = HashSet::new();
+	fn merge_domains(systems: &Systems) -> HashSet<&Domain> {
+	    let mut ret: HashSet<&Domain> = HashSet::new();
 	    for (_, system) in &systems.entries {
 		for domain in &system.domains {
-		    ret.insert(domain.clone());
+		    ret.insert(domain);
 		}
 	    }
 	    ret
@@ -216,11 +230,11 @@ impl Systems {
 	let new_domains = merge_domains(&new);
 
 	// fill up Service sets
-	fn merge_services(systems: &Systems) -> HashSet<Service> {
-	    let mut ret: HashSet<Service> = HashSet::new();
+	fn merge_services(systems: &Systems) -> HashSet<&Service> {
+	    let mut ret: HashSet<&Service> = HashSet::new();
 	    for (_, system) in &systems.entries {
 		for service in &system.services {
-		    ret.insert(service.clone());
+		    ret.insert(service);
 		}
 	    }
 	    ret
@@ -231,10 +245,10 @@ impl Systems {
 	// now that we have nice flat sets we create a new Systems struct
 	// and set the diff_state depending on if old_x is in new_set and new_x is in old_set
 	for old_ip in &old_ips {
-	    let mut system = System::new(old_ip.clone());
+	    let mut system = System::new((*old_ip).clone());
 
 	    // diff ip
-	    if !new_ips.contains(old_ip) {
+	    if !new_ips.iter().any(|x| x.ip == old_ip.ip) {
 		system.diff_state = DiffState::Deleted;
 	    }
 
@@ -258,9 +272,19 @@ impl Systems {
 		if !new_services.contains(old_service) {
 		    service.diff_state = DiffState::Deleted;
 		}
-		if new.entries.contains_key(&old_ip.ip) && 
-		    !new.entries.get(&old_ip.ip).unwrap().services.contains(old_service) {
+		if new.entries.contains_key(&old_ip.ip) { 
+		    let new_system_services = &new.entries.get(&old_ip.ip).unwrap().services;//.contains(old_service) 
+		    if new_system_services.iter().any(|x|
+					    x.port == old_service.port &&
+					    x.state == old_service.state &&
+					    x != old_service){
+			// for example the banner just changed
+			// but the port is still open
+			service.diff_state = DiffState::UpdatedOld;
+		    } else if !new_system_services.contains(old_service) {
+			// the above special case is not true, so mark the rest as deleted
 			service.diff_state = DiffState::Deleted;
+		    }
 		}
 
 		system.services.insert(service);
@@ -273,7 +297,7 @@ impl Systems {
 	    let system = match ret.entries.get_mut(&new_ip.ip) {
 		Some(v) => v,
 		None => {
-		    let mut s = System::new(new_ip.clone());
+		    let mut s = System::new((*new_ip).clone());
 		    s.diff_state = DiffState::New;
 		    ret.entries.insert(new_ip.ip, s);
 		    ret.entries.get_mut(&new_ip.ip).unwrap()
@@ -281,7 +305,8 @@ impl Systems {
 	    };
 
 	    // diff domains
-	    let new_system = new.entries.get(&new_ip.ip).unwrap();
+	    let new_system = new.entries.get(&new_ip.ip)
+		.expect("new_ip not in new, should not happen");
 	    for new_domain in &new_system.domains {
 		let mut domain = new_domain.clone();
 		if !old_domains.contains(new_domain) {
@@ -307,10 +332,19 @@ impl Systems {
 		if !old_services.contains(new_service) {
 		    service.diff_state = DiffState::New;
 		}
-		if self.entries.contains_key(&new_ip.ip) && 
-		    !self.entries.get(&new_ip.ip).unwrap().services.contains(new_service) {
-			// !old.services.contains(new_domain)
+		if self.entries.contains_key(&new_ip.ip) { 
+		    let old_system_services = &self.entries.get(&new_ip.ip).unwrap().services;
+		    if old_system_services.iter().any(|x|
+					    x.port == new_service.port &&
+					    x.state == new_service.state &&
+					    x != new_service){
+			// for example the banner just changed
+			// but the port is still open
+			service.diff_state = DiffState::UpdatedNew;
+		    } else if !old_system_services.contains(new_service) {
+			// the above special case is not true, so mark the rest as deleted
 			service.diff_state = DiffState::New;
+		    }
 		}
 		if !self.entries.contains_key(&new_ip.ip) {
 		    // if we have a new ip we want the services to be marked as new 
@@ -341,6 +375,8 @@ impl Systems {
 	    match *state {
 		DiffState::New => format!("#{}-New", name).into(),
 		DiffState::Deleted => format!("#{}-Deleted", name).into(),
+		DiffState::UpdatedNew => format!("#{}-UpdatedNew", name).into(),
+		DiffState::UpdatedOld => format!("#{}-UpdatedOld", name).into(),
 		DiffState::None => "".into(),
 	    }
 	}
@@ -406,15 +442,42 @@ impl Systems {
 	const DIFF_RED: &str = "#FF3333";
 	const DIFF_GREEN: &str = "#55FF00";
 	const DIFF_GRAY: &str = "#8C8C8C";
-	//const DIFF_ORANGE: &str = "#E69900";
+	const DIFF_ORANGE: &str = "#E69900";
 
 	fn diff_color(state: &DiffState) -> &'static str{
 	    match *state {
 		DiffState::Deleted => DIFF_RED,
 		DiffState::New => DIFF_GREEN,
+		DiffState::UpdatedNew => DIFF_ORANGE,
+		DiffState::UpdatedOld => DIFF_ORANGE,
 		DiffState::None => DIFF_GRAY,
 	    }
 
+	}
+
+	#[derive(Debug,Hash,PartialEq,Eq)]
+	struct DotService<'a>(Vec<&'a Service>);
+	impl<'a> DotService<'a> {
+	    fn new(services: &Vec<&'a Service>) -> Self {
+		let mut s: Vec<&Service> = Vec::new();
+		for service in services {
+		    s.push(service);
+		}
+		Self(s)
+	    }
+	    fn label(&self) -> String {
+		let mut ret: Vec<String> = Vec::new();
+		for service in &self.0 {
+		    ret.push(format!("{}: {}",
+				     service.diff_state.to_string(),
+				     service.label()));
+		}
+		ret.sort();
+		format!("{}\\l", ret.join("\\l"))
+	    }
+	    fn diff_state(&'a self) -> &'a DiffState {
+		&self.0[0].diff_state
+	    }
 	}
 
 	let mut ret: Vec<String> = vec!["digraph Systems {".into()];
@@ -422,26 +485,36 @@ impl Systems {
 	ret.push("node  [style=\"rounded,filled,bold\", shape=box, fontname=\"Arial\"];".into());
 
 	// create uniq domain ids
-	let mut domain_map: HashMap<Domain, u32> = HashMap::new();
+	let mut domain_map: HashMap<&Domain, u32> = HashMap::new();
 	let mut domain_id_counter = 0x80000000;
 	for entry in self.entries.values() {
 	    for domain in &entry.domains {
 		if !domain_map.contains_key(&domain) {
-		    domain_map.insert(domain.clone(), domain_id_counter);
+		    domain_map.insert(domain, domain_id_counter);
 		    domain_id_counter += 1;
 		}
 	    }
 	}
 
-	// create uniq service ids
-	let mut service_map: HashMap<Service, u32> = HashMap::new();
+	// create service_map and merge updated services in DotService structs
+	let mut service_map: HashMap<DotService, u32> = HashMap::new();
 	let mut service_id_counter = 0x00000000;
-	for entry in self.entries.values() {
-	    for service in &entry.services {
-		if !service_map.contains_key(&service) {
-		    service_map.insert(service.clone(), service_id_counter);
-		    service_id_counter += 1;
+	for system in self.entries.values() {
+	    let mut same_port_services: HashMap<&u32, Vec<&Service>> = HashMap::new();
+	    for service in &system.services {
+
+		if !same_port_services.contains_key(&service.port) {
+		    let mut hs = Vec::new();
+		    hs.push(service);
+		    same_port_services.insert(&service.port, hs);
+		    continue;
 		}
+		same_port_services.get_mut(&service.port).unwrap().push(service);
+	    }
+	    for same_port_service in same_port_services.values() {
+
+		service_map.insert(DotService::new(same_port_service), service_id_counter);
+		service_id_counter += 1;
 	    }
 	}
 
@@ -483,7 +556,7 @@ impl Systems {
 
 	    // sevice nodes
 	    for (service, service_id) in &service_map {
-		let color = diff_color(&service.diff_state);
+		let color = diff_color(&service.diff_state());
 		ret.push(format!("\"{}\" [label=\"{}\", fillcolor=\"{}\"];", service_id, service.label(), color).into());
 	    }
 
@@ -499,7 +572,15 @@ impl Systems {
 	// add "ip -> service" edges
 	for (ip, entry) in &self.entries {
 	    for service in &entry.services{
-		ret.push(format!("\"{}\" -> \"{}\"", ip, service_map.get(&service).unwrap()).into());
+		let service_idx: &u32 = service_map
+		    .iter()
+		    .filter(|(dot_service, _)|
+			     dot_service.0.contains(&service))
+		    .map(|(_, idx)| idx)
+		    .nth(0)
+		    .expect("to_dot: service_map broken, no matching service found");
+		
+		ret.push(format!("\"{}\" -> \"{}\"", ip, service_idx).into());
 	    }
 	}
 
@@ -554,14 +635,15 @@ impl Systems {
 	    // merge into &self
 	    for amass_entry in res {
 		for ipinfo in amass_entry.addresses {
+		    let ip = ipinfo.ip;
 		    if !self.entries.contains_key(&ipinfo.ip) {
-			self.entries.insert(ipinfo.ip, System::new(ipinfo.clone()));
+			self.entries.insert(ipinfo.ip, System::new(ipinfo));
 		    } else {
 			// check if we can update infos
 			let entry = &mut self.entries.get_mut(&ipinfo.ip).unwrap();
-			entry.ipinfo.update(&ipinfo);
+			entry.ipinfo.update(ipinfo);
 		    }
-		    let entry = &mut self.entries.get_mut(&ipinfo.ip).unwrap();
+		    let entry = &mut self.entries.get_mut(&ip).unwrap();
 		    entry.domains.insert(Domain::new(&amass_entry.name));
 		}
 	    }

@@ -35,7 +35,7 @@ fn run_diff_cmd(args: &cli::CliArgs) -> parser::Result<()> {
 	    }
 	}
     }
-    let systems = systems_old.diff(&systems_new)?;
+    let systems = systems_old.diff(systems_new)?;
     let output = match args.fmt {
 	cli::OutFmt::Csv => systems.to_csv(),
 	cli::OutFmt::Json => systems.to_json(),
