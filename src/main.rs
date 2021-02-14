@@ -46,6 +46,14 @@ fn run_diff_cmd(args: &cli::CliArgs) -> parser::Result<()> {
     Ok(())
 }
 
+fn usage() {
+    println!("Usage: {} <cmd> <format> <flags>",
+		std::env::args().nth(0).unwrap());
+    println!("\tcmd    = {{merge, diff}}");
+    println!("\tformat = {{csv, json, dot, urls}}");
+    println!("\tflags  = {{--dirs, --new, --old}}");
+    println!("\t         receceives one or more directory as argument");
+}
 
 //dot -Tsvg  -ox.svg <(cargo run -- merge dot --dirs test-logs test-logs2)
 fn main() {
@@ -54,6 +62,7 @@ fn main() {
 	Ok(v) => v,
 	Err(e) => {
 	    println!("{:#?}", e);
+	    usage();
 	    return;
 	},
     };
