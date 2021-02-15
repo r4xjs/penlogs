@@ -6,6 +6,7 @@ pub enum OutFmt {
     Json,
     Dot,
     Urls,
+    Lists,
 }
 #[derive(Debug,PartialEq)]
 pub enum Cmd {
@@ -18,6 +19,7 @@ pub enum Flag {
     New(Vec<PathBuf>),
     Old(Vec<PathBuf>),
     Dirs(Vec<PathBuf>),
+    Dst(PathBuf),
     None,
 }
 
@@ -49,6 +51,7 @@ impl CliArgs {
 	    "json" => OutFmt::Json,
 	    "dot" => OutFmt::Dot,
 	    "urls" => OutFmt::Urls,
+	    "lists" => OutFmt::Lists,
 	    v => return Err(format!("Unknown output format: {}", v)),
 	};
 
@@ -87,10 +90,21 @@ impl CliArgs {
 			}
 			Flag::Old(Vec::new())
 		    },
+		    "--dst" => {
+			if ret.cmd != Cmd::Merge {
+			    return Err("flag --dst not supported for diff command".into());
+			}
+			Flag::Dst("".into())
+		    }
 		    v => return Err(format!("Unkown flag: {}", v).into()),
 		};
 		continue;
 	    }
+
+	    current_flag = match current_flag {
+		Flag::Dst(_) => Flag::Dst(arg.clone().into()),
+		other => other,
+	    };
 
 	    // parse the list of directories for the current_flag 
 	    let _ = match current_flag {
@@ -101,7 +115,10 @@ impl CliArgs {
 
 		    v.push(arg.into());
 		},
+		Flag::Dst(_) => (),
 		Flag::None => return Err("need a flag first".into()),
+
+
 	    };
 	}
 

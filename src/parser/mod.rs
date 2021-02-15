@@ -588,7 +588,7 @@ impl Systems {
 	ret.join("\n")
     }
 
-    pub fn to_urls(&self) -> String {
+    pub fn to_urls(&self) -> HashSet<String> {
 	let mut http = Vec::<u32>::new();
 	let mut https = Vec::<u32>::new();
 	let mut ret = HashSet::<String>::new();
@@ -624,7 +624,7 @@ impl Systems {
 	    ret.extend(add_urls(&system, &http, "http"));
 	    ret.extend(add_urls(&system, &https, "https"));
 	}
-	ret.iter().map(|s| s.to_string()).collect()
+	ret
     }
 
     

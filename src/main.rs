@@ -1,6 +1,53 @@
 mod parser;
 mod cli;
 
+use std::fs::OpenOptions;
+use std::path::PathBuf;
+use std::io::{BufWriter, Write};
+
+fn generate_lists(args: &cli::CliArgs, systems: &parser::Systems)
+		  -> parser::Result<()> {
+
+    // TODO: need to change the args.flags data structure, this is painful
+    let mut dst_dir: Option<PathBuf> = None;
+    for flag in &args.flags {
+	if let cli::Flag::Dst(v) = flag {
+	    dst_dir = Some(v.to_path_buf());
+	    break;
+	}
+    }
+    let dst_dir = match dst_dir {
+	Some(v) => v,
+	None => return Err(parser::ParseError::FileNotFound(
+	    "--dst directory not given".into())),
+    };
+
+    // write out http.lst, https.lst and web.lst
+    let mut http_lst = BufWriter::new(OpenOptions::new()
+	.write(true)
+	.create(true)
+	.open(dst_dir.join("http.lst"))?);
+    let mut https_lst = BufWriter::new(OpenOptions::new()
+	.write(true)
+	.create(true)
+	.open(dst_dir.join("https.lst"))?);
+    let mut web_lst = BufWriter::new(OpenOptions::new()
+	.write(true)
+	.create(true)
+	.open(dst_dir.join("web.lst"))?);
+
+    for url in &systems.to_urls() {
+	if url.starts_with("https") {
+	    https_lst.write(url.as_bytes())?;
+	} else {
+	    http_lst.write(url.as_bytes())?;
+	}
+	web_lst.write(url.as_bytes())?;
+    }
+
+    Ok(())
+}
+
 fn run_merge_cmd(args: &cli::CliArgs) -> parser::Result<()> {
     let mut systems = parser::Systems::new();
     for flag in &args.flags {
@@ -14,7 +61,14 @@ fn run_merge_cmd(args: &cli::CliArgs) -> parser::Result<()> {
 	cli::OutFmt::Csv => systems.to_csv(),
 	cli::OutFmt::Json => systems.to_json(),
 	cli::OutFmt::Dot => systems.to_dot(),
-	cli::OutFmt::Urls => systems.to_urls(),
+	cli::OutFmt::Urls => systems.to_urls()
+	    .iter()
+	    .map(|v| v.to_string())
+	    .collect(),
+	cli::OutFmt::Lists => {
+	    generate_lists(&args, &systems)?;
+	    "lists generated".into()
+	},
     };
     println!("{}", &output);
     Ok(())
@@ -40,7 +94,11 @@ fn run_diff_cmd(args: &cli::CliArgs) -> parser::Result<()> {
 	cli::OutFmt::Csv => systems.to_csv(),
 	cli::OutFmt::Json => systems.to_json(),
 	cli::OutFmt::Dot => systems.to_dot(),
-	cli::OutFmt::Urls => systems.to_urls(),
+	cli::OutFmt::Urls => systems.to_urls()
+	    .iter()
+	    .map(|v| v.to_string())
+	    .collect(),
+	cli::OutFmt::Lists => unreachable!(), 
     };
     println!("{}", &output);
     Ok(())
@@ -50,8 +108,8 @@ fn usage() {
     println!("Usage: {} <cmd> <format> <flags>",
 		std::env::args().nth(0).unwrap());
     println!("\tcmd    = {{merge, diff}}");
-    println!("\tformat = {{csv, json, dot, urls}}");
-    println!("\tflags  = {{--dirs, --new, --old}}");
+    println!("\tformat = {{csv, json, dot, urls, lists}}");
+    println!("\tflags  = {{--dirs, --new, --old, --dst}}");
     println!("\t         receceives one or more directory as argument");
 }
 
