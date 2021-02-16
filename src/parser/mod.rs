@@ -89,10 +89,10 @@ impl DiffState {
 
 #[derive(Debug,Deserialize,Serialize)]
 pub struct System {
-    ipinfo: IpInfo,
-    domains: HashSet<Domain>,
-    services: HashSet<Service>, 
-    diff_state: DiffState,
+    pub ipinfo: IpInfo,
+    pub domains: HashSet<Domain>,
+    pub services: HashSet<Service>, 
+    pub diff_state: DiffState,
 }
 impl System {
     pub fn new(ip: IpInfo) -> Self {
@@ -143,8 +143,8 @@ impl IpInfo {
 
 #[derive(Debug,Deserialize,Serialize,Clone,PartialEq,Eq,Hash)]
 pub struct Domain {
-    name: String,
-    diff_state: DiffState,
+    pub name: String,
+    pub diff_state: DiffState,
 }
 impl Domain {
     pub fn new(domain: &str) -> Self {
@@ -158,12 +158,12 @@ impl Domain {
 
 #[derive(Debug,Deserialize,Serialize,Clone,PartialEq,Eq,Hash)]
 pub struct Service {
-    port: u32,
-    state: ServiceState,
-    proto: String,
-    app_proto: String,
-    banner: String,
-    diff_state: DiffState,
+    pub port: u32,
+    pub state: ServiceState,
+    pub proto: String,
+    pub app_proto: String,
+    pub banner: String,
+    pub diff_state: DiffState,
 }
 impl Service {
     pub fn new(port: u32, state: &str, proto: &str, app_proto: &str, banner: &str) -> Self {
@@ -187,8 +187,8 @@ impl Service {
 
 #[derive(Debug,Deserialize,Serialize)]
 pub struct Systems {
-    entries: HashMap<IpAddr, System>,
-    diffed: bool,
+    pub entries: HashMap<IpAddr, System>,
+    pub diffed: bool,
 }
 
 impl Systems {

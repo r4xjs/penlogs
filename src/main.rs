@@ -4,6 +4,8 @@ mod cli;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::io::{BufWriter, Write};
+use std::net::IpAddr;
+use std::collections::{HashSet, HashMap};
 
 fn generate_lists(args: &cli::CliArgs, systems: &parser::Systems)
 		  -> parser::Result<()> {
@@ -22,20 +24,15 @@ fn generate_lists(args: &cli::CliArgs, systems: &parser::Systems)
 	    "--dst directory not given".into())),
     };
 
-    // write out http.lst, https.lst and web.lst
-    let mut http_lst = BufWriter::new(OpenOptions::new()
-	.write(true)
-	.create(true)
-	.open(dst_dir.join("http.lst"))?);
-    let mut https_lst = BufWriter::new(OpenOptions::new()
-	.write(true)
-	.create(true)
-	.open(dst_dir.join("https.lst"))?);
-    let mut web_lst = BufWriter::new(OpenOptions::new()
-	.write(true)
-	.create(true)
-	.open(dst_dir.join("web.lst"))?);
+    let mut http_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("http.lst"))?);
+    let mut https_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("https.lst"))?);
+    let mut web_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("web.lst"))?);
+    let mut ipv4_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("ipv4.lst"))?);
+    let mut ipv6_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("ipv6.lst"))?);
+    let mut domain_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("domain.lst"))?);
 
+    // http, https and web
+    println!("gen http.lst\ngen https.lst\ngen web.lst");
     for url in &systems.to_urls() {
 	if url.starts_with("https") {
 	    https_lst.write(url.as_bytes())?;
@@ -44,6 +41,55 @@ fn generate_lists(args: &cli::CliArgs, systems: &parser::Systems)
 	}
 	web_lst.write(url.as_bytes())?;
     }
+
+    let mut domains: HashSet<&str> = HashSet::new();
+    let mut ipv4: HashSet<&IpAddr> = HashSet::new();
+    let mut ipv6: HashSet<&IpAddr> = HashSet::new();
+    let mut ports: HashMap<u32, HashSet<&IpAddr>> = HashMap::new();
+
+    for system in systems.entries.values() {
+	if system.ipinfo.ip.is_ipv4() {
+	    ipv4.insert(&system.ipinfo.ip);
+	} else {
+	    ipv6.insert(&system.ipinfo.ip);
+	}
+	for domain in &system.domains {
+	    domains.insert(domain.name.as_str());
+	}
+	for service in &system.services {
+	    if service.state == parser::ServiceState::Open {
+		if !ports.contains_key(&service.port) {
+		    ports.insert(service.port, HashSet::new());
+		}
+		ports.get_mut(&service.port).unwrap().insert(&system.ipinfo.ip);
+	    }
+	}
+    }
+    println!("gen domain.lst");
+    for domain in &domains {
+	domain_lst.write(domain.as_bytes())?;
+	domain_lst.write(b"\n")?;
+    }
+    println!("gen ipv4.lst");
+    for ip in &ipv4 {
+	ipv4_lst.write(format!("{}\n", ip).as_bytes())?;
+    }
+    println!("gen ipv6.lst");
+    for ip in &ipv6 {
+	ipv6_lst.write(format!("{}\n", ip).as_bytes())?;
+    }
+    for (port, ips) in &ports {
+	let port_string = format!("{}.lst", port);
+	let mut port_x_lst = BufWriter::new(OpenOptions::new()
+					    .write(true)
+					    .create(true)
+					    .open(dst_dir.join(&port_string))?);
+	println!("gen {}", &port_string);
+	for ip in ips {
+	    port_x_lst.write(format!("{}\n", ip).as_bytes())?;
+	}
+    }
+
 
     Ok(())
 }
@@ -67,7 +113,7 @@ fn run_merge_cmd(args: &cli::CliArgs) -> parser::Result<()> {
 	    .collect(),
 	cli::OutFmt::Lists => {
 	    generate_lists(&args, &systems)?;
-	    "lists generated".into()
+	    "done".into()
 	},
     };
     println!("{}", &output);
