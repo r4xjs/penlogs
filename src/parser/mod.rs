@@ -20,6 +20,7 @@ pub enum ParseError {
     FileNotFound(String),
     Io(io::Error),
     IntParse(ParseIntError),
+    Flag(String),
 }
 pub type Result<T> = std::result::Result<T, ParseError>;
 macro_rules! impl_from {

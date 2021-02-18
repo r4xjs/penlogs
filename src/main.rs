@@ -1,28 +1,21 @@
 mod parser;
-mod cli;
 
 use std::fs::OpenOptions;
-use std::path::PathBuf;
+use std::path::Path;
 use std::io::{BufWriter, Write};
 use std::net::IpAddr;
 use std::collections::{HashSet, HashMap};
 
-fn generate_lists(args: &cli::CliArgs, systems: &parser::Systems)
+use seahorse::{App, Context, Command, Flag, FlagType};
+
+fn generate_lists(c: &Context, systems: &parser::Systems)
 		  -> parser::Result<()> {
 
-    // TODO: need to change the args.flags data structure, this is painful
-    let mut dst_dir: Option<PathBuf> = None;
-    for flag in &args.flags {
-	if let cli::Flag::Dst(v) = flag {
-	    dst_dir = Some(v.to_path_buf());
-	    break;
-	}
-    }
-    let dst_dir = match dst_dir {
-	Some(v) => v,
-	None => return Err(parser::ParseError::FileNotFound(
-	    "--dst directory not given".into())),
+    let dst_string = match c.string_flag("dst"){
+	Ok(v) => v,
+	_ => return Err(parser::ParseError::Flag("--dst flag is not given".into())),
     };
+    let dst_dir = Path::new(&dst_string);
 
     let mut http_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("http.lst"))?);
     let mut https_lst = BufWriter::new(OpenOptions::new().write(true).create(true).open(dst_dir.join("https.lst"))?);
@@ -94,92 +87,110 @@ fn generate_lists(args: &cli::CliArgs, systems: &parser::Systems)
     Ok(())
 }
 
-fn run_merge_cmd(args: &cli::CliArgs) -> parser::Result<()> {
+fn run_merge_cmd(c: &Context) {
     let mut systems = parser::Systems::new();
-    for flag in &args.flags {
-	if let cli::Flag::Dirs(dirs) = flag {
-	    for dir in dirs {
-		systems.parse(dir)?;
+
+    for dir in &c.args {
+	let _  = match systems.parse(&Path::new(dir)) {
+	    Ok(_) => (),
+	    Err(e) => {
+		println!("{:#?}", e);
+		return;
 	    }
-	}
+	};
     }
-    let output = match args.fmt {
-	cli::OutFmt::Csv => systems.to_csv(),
-	cli::OutFmt::Json => systems.to_json(),
-	cli::OutFmt::Dot => systems.to_dot(),
-	cli::OutFmt::Urls => systems.to_urls()
-	    .iter()
-	    .map(|v| v.to_string())
-	    .collect(),
-	cli::OutFmt::Lists => {
-	    generate_lists(&args, &systems)?;
-	    "done".into()
+    let output = match c.string_flag("fmt").unwrap_or("csv".into()).as_str() {
+	"csv" => systems.to_csv(),
+	"json" => systems.to_json(),
+	"dot" => systems.to_dot(),
+	"lists" => {
+	    match generate_lists(c, &systems) {
+		Ok(()) => "done".into(),
+		Err(e) => {
+		    println!("{:#?}", e);
+		    return;
+		},
+	    }
 	},
+	_ => systems.to_csv(),
     };
     println!("{}", &output);
-    Ok(())
 }
 
-fn run_diff_cmd(args: &cli::CliArgs) -> parser::Result<()> {
+fn run_diff_cmd(c: &Context) {
     let mut systems_old = parser::Systems::new();
     let mut systems_new = parser::Systems::new();
-    for flag in &args.flags {
-	if let cli::Flag::Old(dirs) = flag {
-	    for dir in dirs {
-		systems_old.parse(dir)?;
-	    }
+
+    let mut parse_new = false;
+    for dir in &c.args {
+	if dir == "#vs#" {
+	    parse_new = true;
+	    continue;
 	}
-	if let cli::Flag::New(dirs) = flag {
-	    for dir in dirs {
-		systems_new.parse(dir)?;
-	    }
+	if !parse_new {
+	    match systems_old.parse(Path::new(dir)) {
+		Ok(()) => (),
+		Err(e) => {
+		    println!("{:#?}", e);
+		    return;
+		},
+	    };
+	} else {
+	    match systems_new.parse(Path::new(dir)) {
+		Ok(()) => (),
+		Err(e) => {
+		    println!("{:#?}", e);
+		    return;
+		},
+	    };
+
 	}
     }
-    let systems = systems_old.diff(systems_new)?;
-    let output = match args.fmt {
-	cli::OutFmt::Csv => systems.to_csv(),
-	cli::OutFmt::Json => systems.to_json(),
-	cli::OutFmt::Dot => systems.to_dot(),
-	cli::OutFmt::Urls => systems.to_urls()
-	    .iter()
-	    .map(|v| v.to_string())
-	    .collect(),
-	cli::OutFmt::Lists => unreachable!(), 
+
+    let systems = match systems_old.diff(systems_new) {
+	Ok(s) => s,
+	Err(e) => {
+	    println!("{:#?}", e);
+	    return;
+	}
+    };
+    let output = match c.string_flag("fmt").unwrap_or("csv".into()).as_str() {
+	"csv" => systems.to_csv(),
+	"json" => systems.to_json(),
+	"dot" => systems.to_dot(),
+	f => format!("unknown diff format {}", f).into(),
     };
     println!("{}", &output);
-    Ok(())
 }
 
-fn usage() {
-    println!("Usage: {} <cmd> <format> <flags>",
-		std::env::args().nth(0).unwrap());
-    println!("\tcmd    = {{merge, diff}}");
-    println!("\tformat = {{csv, json, dot, urls, lists}}");
-    println!("\tflags  = {{--dirs, --new, --old, --dst}}");
-    println!("\t         receceives one or more directory as argument");
+fn merge_cmd() -> Command {
+    Command::new("merge")
+	.description("merge mode")
+	.usage("merge: [flags] dirs...")
+	.flag(Flag::new("fmt", FlagType::String)
+	      .description("select output format")
+	      .alias("f"))
+	.flag(Flag::new("dst", FlagType::String)
+	      .description("output directory to write lists to")
+	      .alias("d"))
+	.action(run_merge_cmd)
+}
+
+fn diff_cmd() -> Command {
+    Command::new("diff")
+	.description("diff mode")
+	.usage("diff: [flags] <old-dirs>... \"#vs#\" <new-dirs>...")
+	.flag(Flag::new("fmt", FlagType::String)
+	      .description("select output format")
+	      .alias("f"))
+	.action(run_diff_cmd)
 }
 
 //dot -Tsvg  -ox.svg <(cargo run -- merge dot --dirs test-logs test-logs2)
 fn main() {
-    let mut args = std::env::args();
-    let args = match cli::CliArgs::parse(&mut args) {
-	Ok(v) => v,
-	Err(e) => {
-	    println!("{:#?}", e);
-	    usage();
-	    return;
-	},
-    };
-    let ret = match args.cmd {
-	cli::Cmd::Merge => run_merge_cmd(&args),
-	cli::Cmd::Diff  => run_diff_cmd(&args),
-    };
-
-    match ret {
-	Ok(_) => return,
-	Err(e) => {
-	    println!("{:?}", e);
-	    return;
-	},
-    }
+    let app = App::new("penlogs")
+	.usage("penlogs command [flags] directories...")
+	.command(merge_cmd())
+	.command(diff_cmd());
+    app.run(std::env::args().collect());
 }
